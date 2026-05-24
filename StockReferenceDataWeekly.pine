@@ -1,0 +1,139 @@
+(* # Stock Reference Data - Weekly
+
+Requirements and reference document for the `Stock Reference Data - Weekly.pine` TradingView indicator.
+
+## Description
+
+A compact, on-chart reference panel for stocks intended for the weekly timeframe. Shows Market Cap and the company's Sector in a fully configurable table, and drops an "📊 Earnings" label on bars where an earnings release occurred.
+
+## How it works
+
+The indicator pulls two pieces of fundamental / reference data and renders them in a table on the most recent bar:
+
+- **Market Cap** — Computed as `TOTAL_SHARES_OUTSTANDING (FQ) × close`. Total shares outstanding is fetched via `request.financial()` for the most recent fiscal quarter, then multiplied by the current close. The result is formatted with K / M / B / T suffixes for readability (e.g. `2.85T`, `412.5B`).
+- **Sector** — Pulled directly from `syminfo.sector`, which is the sector classification TradingView associates with the symbol (e.g. *Technology Services*, *Finance*, *Energy Minerals*). Falls back to `N/A` for symbols where the sector is not populated (e.g. ETFs, indices, crypto).
+
+Separately, the indicator calls `request.earnings()` to detect bars where an earnings event was reported. When one is found on the most recent bar, an orange "📊 Earnings" label is placed above the bar's high.
+
+The table is created once and updated only on the last bar (`barstate.islast`), so there is no historical clutter and no per-bar drawing overhead.
+
+## Inputs
+
+**Table Position**
+
+- Vertical Position — `top` / `middle` / `bottom` (default: `top`)
+- Horizontal Position — `left` / `center` / `right` (default: `right`)
+
+All 9 corner/edge placements are supported.
+
+**Table Appearance**
+
+- Background Color (default: black at 80% transparency)
+- Font Color (default: black)
+- Font Size — `tiny` / `small` / `normal` / `large` / `huge` (default: `small`)
+
+## Recommended usage
+
+Apply on a weekly chart. Best used as a "reference card" alongside a long-term trend or position-sizing setup, where market-cap tier (large vs. mid vs. small cap) and sector classification matter for context — for example, when comparing setups across watchlists or rotating between sectors.
+
+## Release notes
+
+### v1.0
+
+- Initial release. Top-right table showing Market Cap and Sector.
+- Configurable table position (9 placements), background color, font color, and font size.
+- Earnings label on the most recent bar when an earnings event is detected.
+May 10
+Release Notes
+Added FINRA short volume % *)
+
+
+## ==============================================================================================================================================================================================================
+
+//@version=5
+indicator("Stock Reference Data - Weekly", overlay=true)
+
+// === User Inputs ===
+// Table positioning
+vPosInput    = input.string("top",   "Vertical Position",   options=["top", "middle", "bottom"], group="Table Position")
+hPosInput    = input.string("right", "Horizontal Position", options=["left", "center", "right"], group="Table Position")
+
+// Table appearance
+bgColorInput   = input.color(color.new(color.black, 80), "Background Color", group="Table Appearance")
+fontColorInput = input.color(color.black,                "Font Color",       group="Table Appearance")
+fontSizeInput  = input.string("small", "Font Size", options=["tiny", "small", "normal", "large", "huge"], group="Table Appearance")
+
+// Map vertical + horizontal position inputs to a Pine position constant
+posKey = vPosInput + "_" + hPosInput
+tablePos = switch posKey
+    "top_left"       => position.top_left
+    "top_center"     => position.top_center
+    "top_right"      => position.top_right
+    "middle_left"    => position.middle_left
+    "middle_center"  => position.middle_center
+    "middle_right"   => position.middle_right
+    "bottom_left"    => position.bottom_left
+    "bottom_center"  => position.bottom_center
+    "bottom_right"   => position.bottom_right
+    => position.top_right
+
+// Map font size input to a Pine size constant
+tableTextSize = switch fontSizeInput
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+    "huge"   => size.huge
+    => size.small
+
+// Get total shares outstanding and compute Market Cap
+TSO = request.financial(syminfo.tickerid, "TOTAL_SHARES_OUTSTANDING", "FQ")
+marketCap = TSO * close
+
+// Get sector for the current symbol
+sectorName = syminfo.sector
+
+// FINRA short volume — share count reported short-sold for the symbol on the chart's timeframe.
+// Note: this is FINRA daily short-volume data (different from the biweekly FINRA short interest figure),
+// aggregated to whatever timeframe the chart is set to. Shown as a percentage of the bar's total volume.
+finraSym       = "FINRA:" + syminfo.ticker + "_SHORT_VOLUME"
+finraShortVol  = request.security(finraSym, timeframe.period, volume, ignore_invalid_symbol=true)
+shortVolPct    = (not na(finraShortVol) and volume > 0) ? (finraShortVol / volume) * 100 : na
+
+// Get earnings data (used for the earnings label below)
+earningsDate = request.earnings(syminfo.tickerid, earnings.actual, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+
+// Format large numbers with K, M, B, T suffixes
+format(float val) =>
+    string result = ""
+    if val >= 1e12
+        result := str.tostring(val / 1e12, "#.##") + "T"
+    else if val >= 1e9
+        result := str.tostring(val / 1e9, "#.##") + "B"
+    else if val >= 1e6
+        result := str.tostring(val / 1e6, "#.##") + "M"
+    else if val >= 1e3
+        result := str.tostring(val / 1e3, "#.##") + "K"
+    else
+        result := str.tostring(val, "#")
+    result
+
+formattedMarketCap = format(marketCap)
+
+// Create a table to display information
+var table infoTable = table.new(tablePos, 2, 3, bgcolor=bgColorInput, border_width=1)
+if barstate.islast
+    table.cell(infoTable, 0, 0, "Market Cap: ", text_color=fontColorInput, text_size=tableTextSize)
+    table.cell(infoTable, 1, 0, na(formattedMarketCap) ? "N/A" : formattedMarketCap, text_color=fontColorInput, text_size=tableTextSize)
+    table.cell(infoTable, 0, 1, "Sector: ", text_color=fontColorInput, text_size=tableTextSize)
+    table.cell(infoTable, 1, 1, na(sectorName) or sectorName == "" ? "N/A" : sectorName, text_color=fontColorInput, text_size=tableTextSize)
+    table.cell(infoTable, 0, 2, "Short Vol % (FINRA): ", text_color=fontColorInput, text_size=tableTextSize)
+    table.cell(infoTable, 1, 2, na(shortVolPct) ? "N/A" : str.tostring(shortVolPct, "#.##") + "%", text_color=fontColorInput, text_size=tableTextSize)
+
+// Optional: Add a label on the chart for earnings date
+if not na(earningsDate) and barstate.islast
+    label.new(bar_index, high, "📊 Earnings", style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
+    
+
+
+
